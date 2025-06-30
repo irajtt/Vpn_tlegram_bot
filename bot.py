@@ -1,71 +1,74 @@
-from aiogram import Bot, Dispatcher, types, executor
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-import logging
+import os
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, ConversationHandler
 
-API_TOKEN = "7976551263:AAH91j86mISkd2U8alw3hJYKRtgXjrWFGWo"
-ADMINS = [7346491945]  # آیدی عددی ادمین‌ها
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
 
-logging.basicConfig(level=logging.INFO)
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+SELECT_VPN, WAIT_RECEIPT, SUPPORT = range(3)
+vpn_options = [["🛡️ V2Ray","🌐 OpenVPN"],["🔐 IKEv2","🚀 WireGuard"]]
 
-# کیبورد انتخاب دستگاه
-device_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-device_kb.add(KeyboardButton("اندروید"), KeyboardButton("iOS"))
+user_services = {}
 
-# کیبورد انتخاب اپراتور
-operator_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-operator_kb.add(
-    KeyboardButton("همراه اول"),
-    KeyboardButton("ایرانسل"),
-    KeyboardButton("شاتل"),
-    KeyboardButton("مخابرات")
-)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [["🛒 خرید سرویس"],["📦 سرویس‌های من"],["💬 پشتیبانی"]]
+    await update.message.reply_text("سلام! من ربات فیلترشکن هستم.👇", 
+        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
-user_data = {}
+async def handle_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = update.message.text
+    uid = update.message.from_user.id
+    if txt=="🛒 خرید سرویس":
+        await update.message.reply_text("نوع سرویس رو انتخاب کن:", 
+            reply_markup=ReplyKeyboardMarkup(vpn_options, resize_keyboard=True))
+        return SELECT_VPN
+    if txt=="📦 سرویس‌های من":
+        cnt = user_services.get(uid,0)
+        await update.message.reply_text(f"شما {cnt} سرویس خریدی.")
+    if txt=="💬 پشتیبانی":
+        await update.message.reply_text("پیامت رو بفرست تا پشتیبانی دریافت کنه.")
+        return SUPPORT
+    return ConversationHandler.END
 
-@dp.message_handler(commands=['start'])
-async def start(msg: types.Message):
-    user_data[msg.from_user.id] = {}
-    await msg.answer("سلام 👋\nبرای دریافت فیلترشکن لطفاً نوع دستگاه رو انتخاب کن:", reply_markup=device_kb)
+async def choose_vpn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["vpn"] = update.message.text
+    await update.message.reply_text("لطفاً به کارت 6037991712345678 پول واریز کن و رسید را ارسال کن.")
+    return WAIT_RECEIPT
 
-@dp.message_handler(lambda m: m.text in ["اندروید", "iOS"])
-async def get_device(msg: types.Message):
-    user_data[msg.from_user.id]['device'] = msg.text
-    await msg.answer("اپراتور سیم‌کارتت رو انتخاب کن:", reply_markup=operator_kb)
+async def receive_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.message.from_user.id
+    if update.message.photo:
+        file = update.message.photo[-1]
+        await context.bot.send_photo(
+            chat_id=ADMIN_CHAT_ID,
+            photo=file.file_id,
+            caption=f"رسید از {uid}. سرویس: {context.user_data.get('vpn')}"
+        )
+        user_services[uid] = user_services.get(uid,0)+1
+        await update.message.reply_text("رسید دریافت شد ✅ منتظر تایید ادمین باش.")
+    else:
+        await update.message.reply_text("لطفاً عکس رسید ارسال کن.")
+    return ConversationHandler.END
 
-@dp.message_handler(lambda m: m.text in ["همراه اول", "ایرانسل", "شاتل", "مخابرات"])
-async def get_operator(msg: types.Message):
-    user_data[msg.from_user.id]['operator'] = msg.text
-    await msg.answer("لطفاً مبلغ را به شماره کارت زیر واریز کن و رسید را ارسال کن:\n\n💳 6219 8619 1104 1041 به نام فلانی")
-
-@dp.message_handler(content_types=types.ContentType.ANY)
-async def receive_payment(msg: types.Message):
-    if msg.from_user.id not in user_data:
-        await msg.answer("لطفاً اول با /start شروع کن.")
-        return
-
-    order = user_data[msg.from_user.id]
-    text = (
-        f"📥 سفارش جدید\n"
-        f"👤 کاربر: @{msg.from_user.username or 'ندارد'}\n"
-        f"🆔 آیدی: {msg.from_user.id}\n"
-        f"📱 دستگاه: {order.get('device')}\n"
-        f"📡 اپراتور: {order.get('operator')}\n"
+async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.message.from_user.id
+    await context.bot.send_message(
+        chat_id=ADMIN_CHAT_ID,
+        text=f"پیام پشتیبانی از {uid}: {update.message.text}"
     )
+    await update.message.reply_text("پیام فرستاده شد ✅")
+    return ConversationHandler.END
 
-    for admin_id in ADMINS:
-        try:
-            if msg.photo:
-                await bot.send_photo(admin_id, msg.photo[-1].file_id, caption=text)
-            elif msg.document:
-                await bot.send_document(admin_id, msg.document.file_id, caption=text)
-            else:
-                await bot.send_message(admin_id, text + f"\n🧾 رسید:\n{msg.text}")
-        except:
-            pass
-
-    await msg.answer("رسیدت دریافت شد ✅\nبعد از تأیید، لینک اتصال برات ارسال می‌شه.")
-
-if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+if __name__=="__main__":
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start), MessageHandler(filters.TEXT, handle_main)],
+        states={
+            SELECT_VPN: [MessageHandler(filters.TEXT, choose_vpn)],
+            WAIT_RECEIPT: [MessageHandler(filters.PHOTO, receive_receipt)],
+            SUPPORT: [MessageHandler(filters.TEXT, support)],
+        },
+        fallbacks=[],
+    )
+    app.add_handler(conv)
+    app.run_polling()
